@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">牛马时录</string>
+    <string name="tracking_channel_name">考勤记录</string>
+    <string name="tracking_channel_desc">常驻通知，用于在后台记录上下班时间</string>
+    <string name="notif_title_tracking">牛马时录运行中</string>
+    <string name="notif_title_idle">牛马时录已暂停</string>
+</resources>

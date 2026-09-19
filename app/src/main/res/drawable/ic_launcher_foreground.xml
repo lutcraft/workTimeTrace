@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 表盘外圈 -->
+    <path
+        android:pathData="M54,31.5 A22.5,22.5 0 1,1 53.99,31.5 Z M54,36 A18,18 0 1,0 54.01,36 Z"
+        android:fillColor="#FFFFFF"
+        android:fillType="evenOdd" />
+    <!-- 时针（向上） -->
+    <path
+        android:pathData="M52.6,55 L52.6,41 L55.4,41 L55.4,55 Z"
+        android:fillColor="#FFFFFF" />
+    <!-- 分针（向右） -->
+    <path
+        android:pathData="M53,52.6 L67,52.6 L67,55.4 L53,55.4 Z"
+        android:fillColor="#FFFFFF" />
+    <!-- 中心圆点 -->
+    <path
+        android:pathData="M51.6,54 A2.4,2.4 0 1,1 51.59,54 Z"
+        android:fillColor="#FFFFFF" />
+</vector>
