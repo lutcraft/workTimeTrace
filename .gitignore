@@ -1,0 +1,15 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+app/build
+# 发布签名证书（请自行备份，勿提交仓库）
+/keystore/
+# 本地构建工具缓存（用于CI验证编译，不属于项目源码）
+/.build-tools/

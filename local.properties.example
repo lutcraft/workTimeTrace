@@ -1,0 +1,12 @@
+# 复制为 local.properties 并按需填写；local.properties 已被 .gitignore 排除，不会入库。
+
+# Android SDK 路径（必填，按本机实际情况修改）
+sdk.dir=D:/path/to/android-sdk
+
+# 发布签名（可选）：不配置时 debug/release 均使用 debug 签名，功能不受影响，
+# 仅高德地图底图与高德定位不可用（App 会自动降级系统定位，打卡/统计正常）。
+# 若需与官方 APK 一致的签名行为，配置自己的 keystore 并在高德控制台绑定对应 SHA1。
+# wtStoreFile=keystore/your-release.jks
+# wtStorePassword=your-store-password
+# wtKeyAlias=your-alias
+# wtKeyPassword=your-key-password
