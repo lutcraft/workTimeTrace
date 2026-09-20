@@ -36,6 +36,7 @@ class MainActivity : ComponentActivity() {
                 app.settingsStore.settings.first().trackingEnabled
             }
             if (enabled && !TrackingService.isRunning) {
+                com.worktime.trace.util.AppLogger.w("检测到服务未运行（被杀/重启），自动恢复")
                 TrackingService.start(this@MainActivity)
             }
         }

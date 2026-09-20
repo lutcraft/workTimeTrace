@@ -55,9 +55,8 @@ class AMapLocator(private val appContext: Context) : Locator {
         if (loc != null && loc.errorCode == 0) {
             onLocation?.invoke(loc.latitude, loc.longitude)
         } else {
-            android.util.Log.w(
-                "WorkTimeTrace",
-                "AMap location failed: code=${loc?.errorCode} detail=${loc?.locationDetail}"
+            com.worktime.trace.util.AppLogger.w(
+                "高德定位失败: code=${loc?.errorCode} detail=${loc?.locationDetail}"
             )
             // code=7: Key 鉴权失败 → 自动降级系统定位
             if (loc?.errorCode == 7) switchToFallback()
@@ -76,7 +75,7 @@ class AMapLocator(private val appContext: Context) : Locator {
 
     private fun switchToFallback() {
         if (fallback != null) return
-        android.util.Log.w("WorkTimeTrace", "AMap auth failed, falling back to system locator")
+        com.worktime.trace.util.AppLogger.w("高德鉴权失败，自动降级为系统定位")
         runCatching { client?.stopLocation() }
         fallback = SystemLocator(appContext).also {
             val cb = onLocation
@@ -169,26 +168,24 @@ class SystemLocator(private val appContext: Context) : Locator {
                     a.latitude, a.longitude, loc.latitude, loc.longitude, results
                 )
                 if (results[0] > 50_000f) {
-                    android.util.Log.w(
-                        "WorkTimeTrace",
-                        "drop wild fix: ${loc.provider} (${loc.latitude},${loc.longitude}) " +
-                            "dist=${results[0].toInt()}m"
+                    com.worktime.trace.util.AppLogger.w(
+                        "丢弃漂移定位: ${loc.provider} (${loc.latitude},${loc.longitude}) " +
+                            "距锚点=${results[0].toInt()}m"
                     )
                     return
                 }
             }
         }
         anchor = loc
-        android.util.Log.d(
-            "WorkTimeTrace",
-            "system fix: ${loc.provider} (${loc.latitude},${loc.longitude}) acc=${loc.accuracy.toInt()}m"
+        com.worktime.trace.util.AppLogger.d(
+            "系统定位: ${loc.provider} (${loc.latitude},${loc.longitude}) 精度=${loc.accuracy.toInt()}m"
         )
         onLocation?.invoke(loc.latitude, loc.longitude)
     }
 
     private fun request(intervalMs: Long) {
         if (!granted()) {
-            android.util.Log.w("WorkTimeTrace", "SystemLocator: no location permission")
+            com.worktime.trace.util.AppLogger.w("系统定位：缺少定位权限")
             return
         }
         val minTime = intervalMs.coerceAtMost(30_000L)
@@ -203,7 +200,7 @@ class SystemLocator(private val appContext: Context) : Locator {
                 runCatching {
                     lm.requestLocationUpdates(p, minTime, 0f, listener, Looper.getMainLooper())
                 }.onFailure {
-                    android.util.Log.w("WorkTimeTrace", "SystemLocator: $p failed: $it")
+                    com.worktime.trace.util.AppLogger.w("系统定位 $p 注册失败: $it")
                 }
             }
         }

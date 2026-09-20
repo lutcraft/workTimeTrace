@@ -54,6 +54,12 @@ class AttendanceRepository(context: Context) {
 
     suspend fun deleteEvent(event: AttendanceEventEntity) = eventDao.delete(event)
 
+    /** 更新一条事件（编辑补录记录：改时间/类型/地点）。 */
+    suspend fun updateEvent(event: AttendanceEventEntity) = eventDao.update(event)
+
+    /** 删除 [from, to) 时间范围内的全部事件（删除某天记录用）。 */
+    suspend fun deleteEventsBetween(from: Long, to: Long) = eventDao.deleteBetween(from, to)
+
     suspend fun latestEventPerWorkplace(): List<AttendanceEventEntity> =
         eventDao.getLatestEventPerWorkplace()
 }

@@ -15,6 +15,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.AlertDialog
@@ -53,6 +54,7 @@ import java.time.LocalTime
 import java.time.YearMonth
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import kotlin.math.roundToInt
 
 private val hmFmt = DateTimeFormatter.ofPattern("HH:mm")
 private val zone: ZoneId = ZoneId.systemDefault()
@@ -63,12 +65,18 @@ fun RecordsScreen(vm: RecordsViewModel) {
     var month by remember { mutableStateOf(YearMonth.now()) }
     var expandedDate by remember { mutableStateOf<LocalDate?>(null) }
     var showManualDialog by remember { mutableStateOf(false) }
+    var editingEvent by remember { mutableStateOf<AttendanceEventEntity?>(null) }
 
     val stats = remember(state.events, state.settings, state.now) {
         OvertimeCalculator.computeDayStats(state.events, state.settings, state.now)
     }
-    val monthDays = remember(stats, month) {
-        stats.filterKeys { YearMonth.from(it) == month }.keys.sortedDescending()
+    // 展示日 = 统计有区间的日子 ∪ 有原始事件的日子（孤立上班/下班也显示）
+    val monthDays = remember(state.events, stats, month) {
+        val eventDays = state.events.map {
+            Instant.ofEpochMilli(it.timestamp).atZone(zone).toLocalDate()
+        }.filter { YearMonth.from(it) == month }
+        val statDays = stats.keys.filter { YearMonth.from(it) == month }
+        (eventDays + statDays).distinct().sortedDescending()
     }
     val workplaceNames = remember(state.workplaces) {
         state.workplaces.associate { it.id to it.name }
@@ -106,7 +114,9 @@ fun RecordsScreen(vm: RecordsViewModel) {
                         style = MaterialTheme.typography.titleSmall
                     )
                     Text(
-                        "标准工时 ${state.settings.standardHours} 小时/天" +
+                        "标准工时 " + OvertimeCalculator.formatDuration(
+                            (state.settings.standardHours * 60).roundToInt() * 60_000L
+                        ) + "/天" +
                             if (state.settings.holidayOvertime) "，节假日全天计加班" else "",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -132,12 +142,15 @@ fun RecordsScreen(vm: RecordsViewModel) {
         items(monthDays.size) { idx ->
             val date = monthDays[idx]
             DayCard(
-                stat = stats[date] ?: return@items,
+                date = date,
+                stat = stats[date],
                 events = eventsOfNaturalDay(state.events, date),
                 workplaceNames = workplaceNames,
                 expanded = expandedDate == date,
                 onToggle = { expandedDate = if (expandedDate == date) null else date },
-                onDeleteEvent = { vm.deleteEvent(it) }
+                onDeleteEvent = { vm.deleteEvent(it) },
+                onDeleteDay = { vm.deleteEventsOfDay(date) },
+                onEditEvent = { editingEvent = it }
             )
         }
 
@@ -156,13 +169,29 @@ fun RecordsScreen(vm: RecordsViewModel) {
         }
     }
 
-    if (showManualDialog) {
+    if (showManualDialog || editingEvent != null) {
         ManualEventDialog(
             workplaces = state.workplaces,
-            onDismiss = { showManualDialog = false },
-            onConfirm = { wpId, isEnter, epochMs ->
-                vm.addManualEvent(wpId, isEnter, epochMs)
+            initialEvent = editingEvent,
+            onDismiss = {
                 showManualDialog = false
+                editingEvent = null
+            },
+            onConfirm = { wpId, isEnter, epochMs ->
+                val target = editingEvent
+                if (target != null) {
+                    vm.updateEvent(
+                        target.copy(
+                            workplaceId = wpId,
+                            type = if (isEnter) EventType.ENTER else EventType.EXIT,
+                            timestamp = epochMs
+                        )
+                    )
+                } else {
+                    vm.addManualEvent(wpId, isEnter, epochMs)
+                }
+                showManualDialog = false
+                editingEvent = null
             }
         )
     }
@@ -180,13 +209,35 @@ private fun eventsOfNaturalDay(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun DayCard(
-    stat: DayStat,
+    date: LocalDate,
+    stat: DayStat?,
     events: List<AttendanceEventEntity>,
     workplaceNames: Map<Long, String>,
     expanded: Boolean,
     onToggle: () -> Unit,
-    onDeleteEvent: (AttendanceEventEntity) -> Unit
+    onDeleteEvent: (AttendanceEventEntity) -> Unit,
+    onDeleteDay: () -> Unit,
+    onEditEvent: (AttendanceEventEntity) -> Unit
 ) {
+    var confirmDeleteDay by remember { mutableStateOf(false) }
+    if (confirmDeleteDay) {
+        AlertDialog(
+            onDismissRequest = { confirmDeleteDay = false },
+            title = { Text("删除当天记录") },
+            text = { Text("将删除 ${date.monthValue}月${date.dayOfMonth}日 的全部打卡记录（${events.size} 条），不可恢复。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDeleteDay = false
+                    onDeleteDay()
+                }) { Text("删除") }
+            },
+            dismissButton = { TextButton(onClick = { confirmDeleteDay = false }) { Text("取消") } }
+        )
+    }
+
+    val restDay = stat?.restDay ?: com.worktime.trace.stats.HolidayCalendar.isRestDay(date)
+    val holidayName = stat?.holidayName ?: com.worktime.trace.stats.HolidayCalendar.holidayName(date)
+
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
             Row(
@@ -198,36 +249,43 @@ private fun DayCard(
                 Column(Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            "${stat.date.monthValue}月${stat.date.dayOfMonth}日 " +
-                                stat.date.dayOfWeek.displayZh(),
+                            "${date.monthValue}月${date.dayOfMonth}日 " + date.dayOfWeek.displayZh(),
                             style = MaterialTheme.typography.titleMedium
                         )
-                        if (stat.restDay) {
+                        if (restDay) {
                             Spacer(Modifier.width(6.dp))
                             Text(
-                                stat.holidayName ?: "休",
+                                holidayName ?: "休",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.tertiary
                             )
                         }
                     }
                     Spacer(Modifier.height(2.dp))
-                    val inOut = listOfNotNull(stat.firstInMs, stat.lastOutMs)
-                    if (inOut.size == 2) {
+                    if (stat != null) {
+                        val inOut = listOfNotNull(stat.firstInMs, stat.lastOutMs)
+                        if (inOut.size == 2) {
+                            Text(
+                                "${fmt(inOut[0])} – ${fmt(inOut[1])} · 在岗 " +
+                                    OvertimeCalculator.formatDuration(stat.workMs),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        } else if (inOut.isNotEmpty()) {
+                            Text(
+                                "${fmt(inOut[0])} – · 在岗 " +
+                                    OvertimeCalculator.formatDuration(stat.workMs),
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    } else {
                         Text(
-                            "${fmt(inOut[0])} – ${fmt(inOut[1])} · 在岗 " +
-                                OvertimeCalculator.formatDuration(stat.workMs),
-                            style = MaterialTheme.typography.bodyMedium
-                        )
-                    } else if (inOut.isNotEmpty()) {
-                        Text(
-                            "${fmt(inOut[0])} – · 在岗 " +
-                                OvertimeCalculator.formatDuration(stat.workMs),
-                            style = MaterialTheme.typography.bodyMedium
+                            "记录未配对（${events.size} 条）",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
-                if (stat.overtimeMs > 0) {
+                if (stat != null && stat.overtimeMs > 0) {
                     Column(horizontalAlignment = Alignment.End) {
                         Text(
                             "+" + OvertimeCalculator.formatDuration(stat.overtimeMs),
@@ -237,6 +295,13 @@ private fun DayCard(
                         Text("加班", style = MaterialTheme.typography.labelSmall)
                     }
                 }
+                IconButton(onClick = { confirmDeleteDay = true }) {
+                    Icon(
+                        Icons.Filled.DeleteOutline,
+                        contentDescription = "删除当天记录",
+                        Modifier.height(18.dp)
+                    )
+                }
                 Icon(
                     if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
                     contentDescription = "展开"
@@ -245,15 +310,17 @@ private fun DayCard(
 
             AnimatedVisibility(visible = expanded) {
                 Column(Modifier.padding(top = 8.dp)) {
-                    Text("在岗时段", style = MaterialTheme.typography.labelMedium)
-                    stat.intervals.forEach { iv ->
-                        Text(
-                            "· ${fmt(iv.startMs)} – " +
-                                if (iv.endMs == Long.MAX_VALUE) "（仍在岗）" else fmt(iv.endMs),
-                            style = MaterialTheme.typography.bodySmall
-                        )
+                    if (stat != null && stat.intervals.isNotEmpty()) {
+                        Text("在岗时段", style = MaterialTheme.typography.labelMedium)
+                        stat.intervals.forEach { iv ->
+                            Text(
+                                "· ${fmt(iv.startMs)} – " +
+                                    if (iv.endMs == Long.MAX_VALUE) "（仍在岗）" else fmt(iv.endMs),
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
                     }
-                    Spacer(Modifier.height(8.dp))
                     Text("原始记录", style = MaterialTheme.typography.labelMedium)
                     events.forEach { ev ->
                         Row(
@@ -271,6 +338,13 @@ private fun DayCard(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
+                            IconButton(onClick = { onEditEvent(ev) }) {
+                                Icon(
+                                    Icons.Filled.Edit,
+                                    contentDescription = "编辑",
+                                    Modifier.height(18.dp)
+                                )
+                            }
                             IconButton(onClick = { onDeleteEvent(ev) }) {
                                 Icon(
                                     Icons.Filled.DeleteOutline,
@@ -291,18 +365,25 @@ private fun DayCard(
 private fun ManualEventDialog(
     workplaces: List<com.worktime.trace.data.db.WorkplaceEntity>,
     onDismiss: () -> Unit,
-    onConfirm: (workplaceId: Long, isEnter: Boolean, epochMs: Long) -> Unit
+    onConfirm: (workplaceId: Long, isEnter: Boolean, epochMs: Long) -> Unit,
+    /** 编辑已有记录时传入（补录新增传 null） */
+    initialEvent: AttendanceEventEntity? = null
 ) {
-    var isEnter by remember { mutableStateOf(true) }
-    var wpId by remember { mutableStateOf(workplaces.firstOrNull()?.id ?: -1L) }
-    var pickDate by remember { mutableStateOf<LocalDate?>(null) }
-    var showDatePicker by remember { mutableStateOf(true) }
-    var showTimePicker by remember { mutableStateOf(false) }
+    val editing = initialEvent != null
+    val initTime = initialEvent?.let {
+        LocalDateTime.ofInstant(Instant.ofEpochMilli(it.timestamp), zone)
+    }
+    var isEnter by remember { mutableStateOf(initialEvent?.type == EventType.ENTER) }
+    var wpId by remember { mutableStateOf(initialEvent?.workplaceId ?: workplaces.firstOrNull()?.id ?: -1L) }
+    var pickDate by remember { mutableStateOf<LocalDate?>(initTime?.toLocalDate()) }
+    // 编辑时日期已知，跳过日期步骤直接选时间；补录仍先选日期
+    var showDatePicker by remember { mutableStateOf(!editing) }
+    var showTimePicker by remember { mutableStateOf(editing) }
 
     if (workplaces.isEmpty()) {
         AlertDialog(
             onDismissRequest = onDismiss,
-            title = { Text("无法补录") },
+            title = { Text(if (editing) "无法编辑" else "无法补录") },
             text = { Text("请先在主页添加工作地点。") },
             confirmButton = {
                 TextButton(onClick = onDismiss) { Text("知道了") }
@@ -312,11 +393,20 @@ private fun ManualEventDialog(
     }
 
     if (showDatePicker) {
+        // DatePicker 以 UTC 0 点定位日期，需把本地时间戳转成"本地日期的 UTC 0 点"
+        val initialDayMs = initialEvent?.timestamp?.let {
+            LocalDateTime.ofInstant(Instant.ofEpochMilli(it), zone).toLocalDate()
+                .atStartOfDay(ZoneId.of("UTC")).toInstant().toEpochMilli()
+        } ?: System.currentTimeMillis()
         val dateState = rememberDatePickerState(
-            initialSelectedDateMillis = System.currentTimeMillis()
+            initialSelectedDateMillis = initialDayMs
         )
+        // 编辑模式：取消日期选择返回时间页（日期只是可选修改项）；补录模式取消关闭
+        val cancelDate: () -> Unit = if (editing) {
+            { showDatePicker = false }
+        } else onDismiss
         DatePickerDialog(
-            onDismissRequest = onDismiss,
+            onDismissRequest = cancelDate,
             confirmButton = {
                 TextButton(onClick = {
                     dateState.selectedDateMillis?.let { ms ->
@@ -325,20 +415,24 @@ private fun ManualEventDialog(
                     }
                     showDatePicker = false
                     showTimePicker = true
-                }) { Text("下一步") }
+                }) { Text(if (editing) "确定" else "下一步") }
             },
-            dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
+            dismissButton = { TextButton(onClick = cancelDate) { Text("取消") } }
         ) {
             DatePicker(state = dateState)
         }
-        return
+        if (!editing) return
     }
 
     if (showTimePicker) {
-        val timeState = rememberTimePickerState(is24Hour = true)
+        val timeState = rememberTimePickerState(
+            initialHour = initTime?.hour ?: 9,
+            initialMinute = initTime?.minute ?: 0,
+            is24Hour = true
+        )
         AlertDialog(
             onDismissRequest = onDismiss,
-            title = { Text("选择时间") },
+            title = { Text(if (editing) "编辑记录" else "选择时间") },
             text = {
                 Column {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -359,6 +453,16 @@ private fun ManualEventDialog(
                             selected = wpId == wp.id,
                             onClick = { wpId = wp.id },
                             label = { Text(wp.name) }
+                        )
+                    }
+                    if (editing) {
+                        // 编辑时日期默认为原记录日期，点击可修改
+                        val d = pickDate ?: LocalDate.now()
+                        Spacer(Modifier.height(8.dp))
+                        FilterChip(
+                            selected = false,
+                            onClick = { showDatePicker = true },
+                            label = { Text("📅 ${d.monthValue}月${d.dayOfMonth}日") }
                         )
                     }
                     Spacer(Modifier.height(8.dp))

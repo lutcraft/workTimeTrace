@@ -4,8 +4,12 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,24 +17,36 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ExperimentalComposeApi
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.worktime.trace.service.TrackingService
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import kotlin.math.roundToInt
 
 @Composable
 fun SettingsScreen(vm: SettingsViewModel) {
@@ -50,15 +66,42 @@ fun SettingsScreen(vm: SettingsViewModel) {
             Column(Modifier.padding(16.dp)) {
                 Text("加班规则", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(8.dp))
-                Text("每日标准工时：${settings.standardHours} 小时")
-                Slider(
-                    value = settings.standardHours,
-                    onValueChange = {
-                        // 步进 0.5 小时
-                        vm.setStandardHours((it * 2).toInt() / 2f)
-                    },
-                    valueRange = 4f..12f
+                // 四舍五入到整分钟，规避 Float 精度误差（5/60 这类值直接乘 3.6e6 会丢毫秒）
+                val stdMs = (settings.standardHours * 60).roundToInt() * 60_000L
+                // 滚轮刻度：小时 4–12，分钟 0/5/10/…/55（旧值吸附到最近刻度）
+                val hourSteps = (4..12).toList()
+                val minuteSteps = (0..55 step 5).toList()
+                val curH = settings.standardHours.toInt().coerceIn(4, 12)
+                val curMFrac = ((settings.standardHours - curH) * 12)
+                    .roundToInt().coerceIn(0, minuteSteps.lastIndex)
+                val curM = minuteSteps[curMFrac]
+                Text(
+                    "每日标准工时：" + com.worktime.trace.stats.OvertimeCalculator.formatDuration(stdMs),
+                    style = MaterialTheme.typography.bodyMedium
                 )
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    WheelPicker(
+                        items = hourSteps.map { "$it 小时" },
+                        selectedIndex = hourSteps.indexOf(curH).let { if (it < 0) 4 else it },
+                        onSelected = { idx ->
+                            vm.setStandardHours(hourSteps[idx] + curM / 60f)
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                    WheelPicker(
+                        items = minuteSteps.map { if (it == 0) "整点" else "$it 分钟" },
+                        selectedIndex = curMFrac,
+                        onSelected = { idx ->
+                            vm.setStandardHours(curH + minuteSteps[idx] / 60f)
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
                 SettingSwitch(
                     title = "周末全天计加班",
                     subtitle = "周六、周日（调休上班除外）在岗时间全部计入加班",
@@ -142,10 +185,46 @@ fun SettingsScreen(vm: SettingsViewModel) {
 
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
+                Text("诊断", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(onClick = {
+                    val file = com.worktime.trace.util.AppLogger.export()
+                    if (file != null) {
+                        val uri = androidx.core.content.FileProvider.getUriForFile(
+                            context, context.packageName + ".fileprovider", file
+                        )
+                        val send = Intent(Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_STREAM, uri)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        runCatching {
+                            context.startActivity(Intent.createChooser(send, "分享排障日志"))
+                        }
+                    } else {
+                        android.widget.Toast.makeText(context, "暂无日志可导出", android.widget.Toast.LENGTH_SHORT).show()
+                    }
+                }) { Text("导出日志（用于反馈问题）") }
+                Text(
+                    "导出最近 7 天的运行日志（定位、打卡、服务状态），可通过微信/QQ 等发给开发者排查问题。日志不包含位置历史以外的个人信息。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp)) {
                 Text("关于", style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(8.dp))
+                // 版本号动态读取（PackageManager），与 build.gradle.kts 保持一致
+                val versionName = remember {
+                    runCatching {
+                        context.packageManager.getPackageInfo(context.packageName, 0).versionName
+                    }.getOrNull() ?: "?"
+                }
                 Text(
-                    "牛马时录 v1.0.0 · 进入工作地点范围自动记上班，离开自动记下班，" +
+                    "牛马时录 v$versionName · 进入工作地点范围自动记上班，离开自动记下班，" +
                         "按规则统计加班。数据仅保存在本机。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -186,5 +265,96 @@ private fun SettingSwitch(
         }
         Spacer(Modifier.width(8.dp))
         Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
+
+/**
+ * 上下滚动的滚轮选择器（机械时钟样式）。
+ *
+ * 实现：LazyColumn + SnapFlingBehavior，上下各留一行 contentPadding
+ * 使首尾项也能滚到中心；中心项 = firstVisibleItemIndex。
+ */
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+@Composable
+private fun WheelPicker(
+    items: List<String>,
+    selectedIndex: Int,
+    onSelected: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val itemHeight = 44.dp
+    val visibleCount = 3
+    val listState = rememberLazyListState()
+
+    // 用户一旦手动滚动即接管，之后设置值变化不再自动重定位（避免拉回抖动）；
+    // 接管前（含 DataStore 真值晚于首帧到达的场景）跟随 selectedIndex 定位
+    var userInteracted by remember { mutableStateOf(false) }
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress }
+            .filter { it }
+            .collect { userInteracted = true }
+    }
+    LaunchedEffect(selectedIndex, items.size) {
+        if (!userInteracted) {
+            listState.scrollToItem(selectedIndex.coerceIn(0, items.lastIndex))
+        }
+    }
+
+    // LaunchedEffect 不会因 lambda 变化重启，必须用 rememberUpdatedState
+    // 拿最新的回调值，否则滚动停选会用过期的小时/分钟组合出错误值
+    val currentOnSelected by rememberUpdatedState(onSelected)
+    val currentSelectedIndex by rememberUpdatedState(selectedIndex)
+
+    // 滚动停止后回调中心项；跳过初始误发射（定位前 index=0 且值不同）
+    LaunchedEffect(listState, items.size) {
+        snapshotFlow { listState.isScrollInProgress to listState.firstVisibleItemIndex }
+            .distinctUntilChanged()
+            .filter { !it.first }
+            .collect { pair ->
+                val idx = pair.second
+                if (idx in items.indices && idx != currentSelectedIndex) currentOnSelected(idx)
+            }
+    }
+
+    Box(modifier) {
+        // 中心选中框（画在列表下层，文字浮于其上）
+        Box(
+            Modifier
+                .align(Alignment.Center)
+                .fillMaxWidth()
+                .height(itemHeight)
+                .background(
+                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                    RoundedCornerShape(12.dp)
+                )
+        )
+        LazyColumn(
+            state = listState,
+            flingBehavior = rememberSnapFlingBehavior(listState),
+            contentPadding = PaddingValues(vertical = itemHeight),
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(itemHeight * visibleCount)
+        ) {
+            items(count = items.size) { i ->
+                val selected by remember {
+                    derivedStateOf { i == listState.firstVisibleItemIndex }
+                }
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(itemHeight),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        items[i],
+                        style = if (selected) MaterialTheme.typography.titleMedium
+                        else MaterialTheme.typography.bodyLarge,
+                        color = if (selected) MaterialTheme.colorScheme.onSurface
+                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                    )
+                }
+            }
+        }
     }
 }

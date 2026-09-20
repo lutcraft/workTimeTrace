@@ -59,6 +59,7 @@ import java.time.Instant
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import kotlin.math.roundToInt
 
 private val timeFmt = DateTimeFormatter.ofPattern("HH:mm")
 
@@ -274,7 +275,9 @@ fun HomeScreen(vm: HomeViewModel, onOpenMap: (Long) -> Unit) {
                         )
                     }
                     Text(
-                        "规则：工作日超出标准 ${state.settings.standardHours} 小时计加班；" +
+                        "规则：工作日超出标准 " + OvertimeCalculator.formatDuration(
+                            (state.settings.standardHours * 60).roundToInt() * 60_000L
+                        ) + "计加班；" +
                             "周末/节假日全天计加班（可在设置中修改）",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant

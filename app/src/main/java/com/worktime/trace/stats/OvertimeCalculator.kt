@@ -67,7 +67,9 @@ object OvertimeCalculator {
             }
         }
 
-        val standardMs = (settings.standardHours * 3600_000L).toLong()
+        // 先四舍五入到整分钟再转毫秒：standardHours 是 Float（如 8+5/60f），
+        // 直接乘 3.6e6 会因单精度误差掉毫秒，导致分钟级显示/比较出错
+        val standardMs = kotlin.math.round(settings.standardHours * 60).toLong() * 60_000L
         val result = HashMap<LocalDate, DayStat>(perDay.size)
         for ((date, list) in perDay) {
             val merged = mergeIntervals(list)

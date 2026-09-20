@@ -17,6 +17,7 @@ class WorkTimeTraceApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        com.worktime.trace.util.AppLogger.init(this)
         // 高德合规接口：必须在任何地图/定位功能初始化之前调用，
         // 否则 SDK 拒绝工作（地图白屏、定位无回调）。
         MapsInitializer.updatePrivacyShow(this, true, true)

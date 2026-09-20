@@ -43,6 +43,25 @@ class RecordsViewModel(private val app: WorkTimeTraceApp) : ViewModel() {
         viewModelScope.launch { app.repository.deleteEvent(event) }
     }
 
+    /** 删除某自然日的全部事件。 */
+    fun deleteEventsOfDay(date: java.time.LocalDate) {
+        viewModelScope.launch {
+            val z = java.time.ZoneId.systemDefault()
+            val from = date.atStartOfDay(z).toInstant().toEpochMilli()
+            val to = date.plusDays(1).atStartOfDay(z).toInstant().toEpochMilli()
+            com.worktime.trace.util.AppLogger.d("删除 $date 全部记录")
+            app.repository.deleteEventsBetween(from, to)
+        }
+    }
+
+    /** 编辑一条记录（改时间/类型/地点）。 */
+    fun updateEvent(event: AttendanceEventEntity) {
+        viewModelScope.launch {
+            com.worktime.trace.util.AppLogger.d("编辑记录: id=${event.id} type=${event.type} ts=${event.timestamp}")
+            app.repository.updateEvent(event)
+        }
+    }
+
     fun addManualEvent(workplaceId: Long, isEnter: Boolean, epochMs: Long) {
         viewModelScope.launch {
             app.repository.addEvent(

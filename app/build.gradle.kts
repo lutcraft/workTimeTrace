@@ -14,8 +14,8 @@ android {
         applicationId = "com.worktime.trace"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
     }
 
     // 签名信息从 local.properties 读取（该文件不入库，模板见 local.properties.example）；

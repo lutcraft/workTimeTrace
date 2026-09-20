@@ -83,6 +83,7 @@ class TrackingService : Service() {
         super.onCreate()
         isRunning = true
         app = application as WorkTimeTraceApp
+        com.worktime.trace.util.AppLogger.d("前台服务创建")
         createChannel()
         // 尽快进入前台，满足系统对前台服务的时限要求
         ServiceCompat.startForeground(
@@ -156,6 +157,7 @@ class TrackingService : Service() {
 
     override fun onDestroy() {
         isRunning = false
+        com.worktime.trace.util.AppLogger.w("前台服务销毁")
         stopTracking()
         scope.cancel()
         super.onDestroy()
@@ -164,7 +166,7 @@ class TrackingService : Service() {
     // ---- 定位回调（可能在任意线程）----
 
     private fun onPosition(lat: Double, lng: Double) {
-        android.util.Log.d("WorkTimeTrace", "location: lat=$lat lng=$lng")
+        com.worktime.trace.util.AppLogger.d("定位回调: lat=$lat lng=$lng")
         scope.launch(positionDispatcher) {
             val workplaces = app.repository.getEnabledWorkplaces()
             for (wp in workplaces) {
@@ -179,6 +181,10 @@ class TrackingService : Service() {
                         timestamp = System.currentTimeMillis(),
                         latitude = lat,
                         longitude = lng
+                    )
+                    com.worktime.trace.util.AppLogger.d(
+                        "记录" + (if (changed) "上班(ENTER)" else "下班(EXIT)") +
+                            ": 地点=${wp.name} 距离=${dist.toInt()}m"
                     )
                     notifyStateChange(changed, wp.name)
                 }
