@@ -19,6 +19,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
@@ -41,7 +42,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.worktime.trace.data.db.AttendanceEventEntity
 import com.worktime.trace.data.db.EventType
 import com.worktime.trace.data.prefs.AppSettings
@@ -62,6 +65,7 @@ private val zone: ZoneId = ZoneId.systemDefault()
 @Composable
 fun RecordsScreen(vm: RecordsViewModel) {
     val state by vm.uiState.collectAsState()
+    val context = LocalContext.current
     var month by remember { mutableStateOf(YearMonth.now()) }
     var expandedDate by remember { mutableStateOf<LocalDate?>(null) }
     var showManualDialog by remember { mutableStateOf(false) }
@@ -121,21 +125,49 @@ fun RecordsScreen(vm: RecordsViewModel) {
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    Spacer(Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = {
+                            exportMonthEventsCsv(context, month, state.events, workplaceNames)
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(42.dp)
+                    ) {
+                        Text("导出当月流水 CSV", style = MaterialTheme.typography.labelLarge)
+                    }
                 }
             }
         }
 
         if (monthDays.isEmpty()) {
             item {
-                Text(
-                    "本月暂无记录",
+                Card(
                     Modifier
                         .fillMaxWidth()
-                        .padding(vertical = 32.dp),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                )
+                        .padding(vertical = 24.dp)
+                ) {
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 32.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text("📅", fontSize = 40.sp)
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "${month.year}年${month.monthValue}月 暂无考勤记录",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "点击下方按钮补录，或开启记录服务自动打卡",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        )
+                    }
+                }
             }
         }
 
@@ -373,7 +405,10 @@ private fun ManualEventDialog(
     val initTime = initialEvent?.let {
         LocalDateTime.ofInstant(Instant.ofEpochMilli(it.timestamp), zone)
     }
-    var isEnter by remember { mutableStateOf(initialEvent?.type == EventType.ENTER) }
+    var isEnter by remember(initialEvent?.id) {
+        // 补录默认「上班」（高频场景）；编辑时跟随原记录类型
+        mutableStateOf(initialEvent?.type == EventType.ENTER || initialEvent == null)
+    }
     var wpId by remember { mutableStateOf(initialEvent?.workplaceId ?: workplaces.firstOrNull()?.id ?: -1L) }
     var pickDate by remember { mutableStateOf<LocalDate?>(initTime?.toLocalDate()) }
     // 编辑时日期已知，跳过日期步骤直接选时间；补录仍先选日期
@@ -488,3 +523,60 @@ private fun fmt(ms: Long): String =
 
 private fun java.time.DayOfWeek.displayZh(): String =
     getDisplayName(java.time.format.TextStyle.SHORT, java.util.Locale.CHINESE)
+
+
+/**
+ * 将当前选定月份的进出围栏流水导出为 UTF-8 BOM CSV，
+ * 写入 cache/exports 并通过系统分享面板发出（可存到文件、发微信等）。
+ */
+private fun exportMonthEventsCsv(
+    context: android.content.Context,
+    month: YearMonth,
+    events: List<AttendanceEventEntity>,
+    workplaceNames: Map<Long, String>
+) {
+    val dateFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd")
+    val timeFmt = DateTimeFormatter.ofPattern("HH:mm:ss")
+    val monthEvents = events
+        .filter { YearMonth.from(Instant.ofEpochMilli(it.timestamp).atZone(zone)) == month }
+        .sortedBy { it.timestamp }
+
+    if (monthEvents.isEmpty()) {
+        android.widget.Toast.makeText(context, "当月暂无考勤流水可导出", android.widget.Toast.LENGTH_SHORT).show()
+        return
+    }
+
+    val sb = StringBuilder("\uFEFF")
+    sb.appendLine("日期,时间,时间戳(ms),类型,工作地点,纬度,经度,备注")
+    for (ev in monthEvents) {
+        val zdt = Instant.ofEpochMilli(ev.timestamp).atZone(zone)
+        val dateStr = zdt.format(dateFmt)
+        val timeStr = zdt.format(timeFmt)
+        val typeStr = if (ev.type == EventType.ENTER) "上班(ENTER)" else "下班(EXIT)"
+        val wpName = (workplaceNames[ev.workplaceId] ?: "#${ev.workplaceId}").replace(",", " ")
+        val latStr = ev.latitude?.let { String.format(java.util.Locale.US, "%.6f", it) } ?: ""
+        val lngStr = ev.longitude?.let { String.format(java.util.Locale.US, "%.6f", it) } ?: ""
+        val remark = if (ev.manual) "手动补录" else "自动围栏打卡"
+        sb.appendLine("$dateStr,$timeStr,${ev.timestamp},$typeStr,$wpName,$latStr,$lngStr,$remark")
+    }
+
+    runCatching {
+        val fileName = "worktime_records_${month.year}_${String.format("%02d", month.monthValue)}.csv"
+        val dir = java.io.File(context.cacheDir, "exports").apply { mkdirs() }
+        val file = java.io.File(dir, fileName)
+        file.writeText(sb.toString(), Charsets.UTF_8)
+        val uri = androidx.core.content.FileProvider.getUriForFile(
+            context,
+            context.packageName + ".fileprovider",
+            file
+        )
+        val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+            type = "text/csv"
+            putExtra(android.content.Intent.EXTRA_STREAM, uri)
+            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(android.content.Intent.createChooser(intent, "导出考勤流水 CSV"))
+    }.onFailure {
+        android.widget.Toast.makeText(context, "导出失败: ${it.message}", android.widget.Toast.LENGTH_SHORT).show()
+    }
+}

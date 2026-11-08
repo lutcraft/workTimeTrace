@@ -3,6 +3,7 @@ package com.worktime.trace.stats
 import com.worktime.trace.data.db.AttendanceEventEntity
 import com.worktime.trace.data.db.EventType
 import com.worktime.trace.data.prefs.AppSettings
+import com.worktime.trace.data.prefs.CalcMode
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -14,7 +15,7 @@ data class PresenceInterval(val startMs: Long, val endMs: Long)
 /** 一天的统计结果。 */
 data class DayStat(
     val date: LocalDate,
-    /** 在岗总时长（毫秒） */
+    /** 在岗总时长（毫秒），按当前计时模式计算 */
     val workMs: Long,
     /** 加班时长（毫秒） */
     val overtimeMs: Long,
@@ -27,7 +28,11 @@ data class DayStat(
     /** 是否休息日（周末/节假日，扣除调休） */
     val restDay: Boolean,
     /** 节假日名（休息日且为法定节假日时有值） */
-    val holidayName: String?
+    val holidayName: String?,
+    /** 多段并集毛工时（用于主页双模式对比展示） */
+    val intervalUnionMs: Long,
+    /** 首进末出跨度毛工时（用于主页双模式对比展示） */
+    val firstLastSpanMs: Long
 )
 
 /**
@@ -73,7 +78,16 @@ object OvertimeCalculator {
         val result = HashMap<LocalDate, DayStat>(perDay.size)
         for ((date, list) in perDay) {
             val merged = mergeIntervals(list)
-            val workMs = merged.sumOf { it.endMs - it.startMs }
+            val firstInMs = merged.firstOrNull()?.startMs
+            val lastOutMs = merged.lastOrNull()?.endMs
+            val intervalUnionMs = merged.sumOf { it.endMs - it.startMs }
+            val firstLastSpanMs = if (firstInMs != null && lastOutMs != null && lastOutMs >= firstInMs) {
+                lastOutMs - firstInMs
+            } else 0L
+            val workMs = when (settings.calcMode) {
+                CalcMode.INTERVAL_UNION -> intervalUnionMs
+                CalcMode.FIRST_IN_LAST_OUT -> firstLastSpanMs
+            }
             val holidayName = HolidayCalendar.holidayName(date)
             val restDay = HolidayCalendar.isRestDay(date)
             val overtimeMs = if (restDay) {
@@ -87,11 +101,13 @@ object OvertimeCalculator {
                 date = date,
                 workMs = workMs,
                 overtimeMs = overtimeMs,
-                firstInMs = merged.firstOrNull()?.startMs,
-                lastOutMs = merged.lastOrNull()?.endMs,
+                firstInMs = firstInMs,
+                lastOutMs = lastOutMs,
                 intervals = merged,
                 restDay = restDay,
-                holidayName = holidayName
+                holidayName = holidayName,
+                intervalUnionMs = intervalUnionMs,
+                firstLastSpanMs = firstLastSpanMs
             )
         }
         return result

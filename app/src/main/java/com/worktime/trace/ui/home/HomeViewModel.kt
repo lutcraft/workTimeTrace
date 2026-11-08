@@ -74,6 +74,11 @@ class HomeViewModel(private val app: WorkTimeTraceApp) : ViewModel() {
         viewModelScope.launch { app.repository.deleteWorkplace(id) }
     }
 
+    /** 主页快捷切换计时模式（实时生效，与设置页共享同一存储）。 */
+    fun setCalcMode(mode: com.worktime.trace.data.prefs.CalcMode) {
+        viewModelScope.launch { app.settingsStore.setCalcMode(mode) }
+    }
+
     companion object {
         /** 高德 Key 是否已配置（Manifest 中非占位符）。 */
         fun isAmapKeyConfigured(app: Application): Boolean =

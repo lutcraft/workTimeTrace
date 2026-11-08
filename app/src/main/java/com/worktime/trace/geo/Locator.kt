@@ -20,14 +20,14 @@ import com.worktime.trace.ui.home.HomeViewModel
  * 若先以系统定位设点、后配置了高德 Key，建议重新选点。
  */
 interface Locator {
-    /** 周期定位。回调可能在任意线程。需在主线程调用。 */
+    /** 周期定位。回调可能在任意线程。需在主线程调用。accuracy 为定位精度（米）。 */
     fun startPeriodic(
         intervalMs: Long,
-        onLocation: (lat: Double, lng: Double) -> Unit
+        onLocation: (lat: Double, lng: Double, accuracyMeters: Float) -> Unit
     )
 
     /** 单次定位（先回传缓存位置，拿到新位置后再次回传）。需在主线程调用。 */
-    fun locateOnce(onLocation: (lat: Double, lng: Double) -> Unit)
+    fun locateOnce(onLocation: (lat: Double, lng: Double, accuracyMeters: Float) -> Unit)
 
     fun destroy()
 }
@@ -45,7 +45,7 @@ object LocatorFactory {
 class AMapLocator(private val appContext: Context) : Locator {
 
     private var client: AMapLocationClient? = null
-    private var onLocation: ((Double, Double) -> Unit)? = null
+    private var onLocation: ((Double, Double, Float) -> Unit)? = null
     private var currentIntervalMs: Long = 0
 
     /** 鉴权失败后的系统定位兜底。 */
@@ -53,7 +53,7 @@ class AMapLocator(private val appContext: Context) : Locator {
 
     private val listener = AMapLocationListener { loc ->
         if (loc != null && loc.errorCode == 0) {
-            onLocation?.invoke(loc.latitude, loc.longitude)
+            onLocation?.invoke(loc.latitude, loc.longitude, loc.accuracy)
         } else {
             com.worktime.trace.util.AppLogger.w(
                 "高德定位失败: code=${loc?.errorCode} detail=${loc?.locationDetail}"
@@ -85,7 +85,7 @@ class AMapLocator(private val appContext: Context) : Locator {
         }
     }
 
-    override fun startPeriodic(intervalMs: Long, onLocation: (Double, Double) -> Unit) {
+    override fun startPeriodic(intervalMs: Long, onLocation: (Double, Double, Float) -> Unit) {
         this.onLocation = onLocation
         this.currentIntervalMs = intervalMs
         fallback?.destroy()
@@ -102,7 +102,7 @@ class AMapLocator(private val appContext: Context) : Locator {
         ensureClient().startLocation()
     }
 
-    override fun locateOnce(onLocation: (Double, Double) -> Unit) {
+    override fun locateOnce(onLocation: (Double, Double, Float) -> Unit) {
         this.onLocation = onLocation
         fallback?.destroy()
         fallback = null
@@ -133,7 +133,7 @@ class AMapLocator(private val appContext: Context) : Locator {
 class SystemLocator(private val appContext: Context) : Locator {
 
     private val lm = appContext.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-    private var onLocation: ((Double, Double) -> Unit)? = null
+    private var onLocation: ((Double, Double, Float) -> Unit)? = null
 
     /** 最近一次被接受的位置（锚点），用于过滤网络定位的跨城漂移。 */
     private var anchor: android.location.Location? = null
@@ -180,7 +180,7 @@ class SystemLocator(private val appContext: Context) : Locator {
         com.worktime.trace.util.AppLogger.d(
             "系统定位: ${loc.provider} (${loc.latitude},${loc.longitude}) 精度=${loc.accuracy.toInt()}m"
         )
-        onLocation?.invoke(loc.latitude, loc.longitude)
+        onLocation?.invoke(loc.latitude, loc.longitude, loc.accuracy)
     }
 
     private fun request(intervalMs: Long) {
@@ -220,14 +220,14 @@ class SystemLocator(private val appContext: Context) : Locator {
         }.getOrNull()
     }
 
-    override fun startPeriodic(intervalMs: Long, onLocation: (Double, Double) -> Unit) {
+    override fun startPeriodic(intervalMs: Long, onLocation: (Double, Double, Float) -> Unit) {
         this.onLocation = onLocation
         request(intervalMs)
         // 立即回传一次缓存位置，加快首次围栏判定
         bestLastKnown()?.let { offer(it) }
     }
 
-    override fun locateOnce(onLocation: (Double, Double) -> Unit) {
+    override fun locateOnce(onLocation: (Double, Double, Float) -> Unit) {
         this.onLocation = onLocation
         bestLastKnown()?.let { offer(it) }
         request(1000L)

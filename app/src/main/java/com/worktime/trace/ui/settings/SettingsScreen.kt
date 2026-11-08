@@ -26,6 +26,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -43,6 +44,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.worktime.trace.data.prefs.CalcMode
 import com.worktime.trace.service.TrackingService
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
@@ -114,6 +116,62 @@ fun SettingsScreen(vm: SettingsViewModel) {
                     checked = settings.holidayOvertime,
                     onChange = { vm.setHolidayOvertime(it) }
                 )
+                Spacer(Modifier.height(8.dp))
+                Text("工时计时模式", style = MaterialTheme.typography.bodyMedium)
+                Spacer(Modifier.height(4.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    CalcMode.entries.forEach { mode ->
+                        FilterChip(
+                            selected = settings.calcMode == mode,
+                            onClick = { vm.setCalcMode(mode) },
+                            label = { Text(mode.label) }
+                        )
+                    }
+                }
+                Text(
+                    settings.calcMode.desc,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                SettingSwitch(
+                    title = "加班时长关怀提醒",
+                    subtitle = "当日加班超过设定阈值时，在主页状态卡片高亮提示“今日加班较多，注意休息”",
+                    checked = settings.overtimeAlertEnabled,
+                    onChange = { vm.setOvertimeAlertEnabled(it) }
+                )
+                if (settings.overtimeAlertEnabled) {
+                    Text(
+                        "提醒阈值：${settings.overtimeAlertThresholdHours} 小时",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    // 滑杆：0.5–6.0 小时，步进 0.5（拖动结束吸附到 0.5 步进并保存）
+                    Slider(
+                        value = settings.overtimeAlertThresholdHours,
+                        onValueChange = { vm.setOvertimeAlertThresholdHours((it * 2).toInt() / 2f) },
+                        valueRange = 0.5f..6f
+                    )
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(1.0f, 1.5f, 2.0f, 3.0f, 4.0f).forEach { h ->
+                            FilterChip(
+                                selected = settings.overtimeAlertThresholdHours == h,
+                                onClick = { vm.setOvertimeAlertThresholdHours(h) },
+                                label = {
+                                    Text(
+                                        "${h}h",
+                                        maxLines = 1,
+                                        style = MaterialTheme.typography.labelMedium
+                                    )
+                                },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                }
             }
         }
 

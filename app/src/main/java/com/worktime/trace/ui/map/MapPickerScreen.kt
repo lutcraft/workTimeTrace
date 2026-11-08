@@ -119,7 +119,7 @@ fun MapPickerScreen(
             val locator = pickerLocator ?: LocatorFactory.create(context).also {
                 pickerLocator = it
             }
-            locator.locateOnce { lat, lng ->
+            locator.locateOnce { lat, lng, _ ->
                 mainHandler.post {
                     val p = LatLng(lat, lng)
                     aMap?.moveCamera(CameraUpdateFactory.newLatLngZoom(p, 16f))

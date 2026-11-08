@@ -14,8 +14,8 @@ android {
         applicationId = "com.worktime.trace"
         minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "1.1.0"
+    versionCode = 3
+    versionName = "1.2.0"
     }
 
     // 签名信息从 local.properties 读取（该文件不入库，模板见 local.properties.example）；
@@ -105,4 +105,6 @@ dependencies {
     // 高德 3D 地图 SDK（选点）；10.x 已内嵌定位能力（com.amap.api.location.*），
     // 不依赖 Google Play Services，适配国产 ROM。切勿再单独引入 com.amap.api:location，会类冲突。
     implementation("com.amap.api:3dmap:10.0.600")
+
+    testImplementation("junit:junit:4.13.2")
 }

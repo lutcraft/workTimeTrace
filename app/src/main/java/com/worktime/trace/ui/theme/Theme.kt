@@ -1,15 +1,14 @@
 package com.worktime.trace.ui.theme
 
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.Shapes
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 
 private val GreenPrimary = Color(0xFF1E6E5C)
 private val GreenOnPrimary = Color(0xFFFFFFFF)
@@ -54,18 +53,21 @@ private val DarkScheme = darkColorScheme(
     error = Color(0xFFFFB4AB)
 )
 
+/** 全局圆角体系：与 Niu 视觉稿的 rounded-2xl(16dp)/xl(12dp) 对齐。 */
+private val AppShapes = Shapes(
+    extraSmall = RoundedCornerShape(8.dp),
+    small = RoundedCornerShape(10.dp),
+    medium = RoundedCornerShape(16.dp),
+    large = RoundedCornerShape(20.dp),
+    extraLarge = RoundedCornerShape(24.dp)
+)
+
 @Composable
 fun WorkTimeTraceTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit
 ) {
-    val colorScheme = when {
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        }
-        darkTheme -> DarkScheme
-        else -> LightScheme
-    }
-    MaterialTheme(colorScheme = colorScheme, content = content)
+    // 固定使用品牌色板（与 Niu 视觉稿一致）：Android 12+ 动态取色会替换主题色导致视觉不统一，故禁用
+    val colorScheme = if (darkTheme) DarkScheme else LightScheme
+    MaterialTheme(colorScheme = colorScheme, shapes = AppShapes, content = content)
 }

@@ -10,8 +10,10 @@ import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -28,6 +30,7 @@ import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -43,12 +46,14 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
@@ -65,6 +70,14 @@ private val timeFmt = DateTimeFormatter.ofPattern("HH:mm")
 
 private fun fmtTime(ms: Long, zone: ZoneId): String =
     LocalDateTime.ofInstant(Instant.ofEpochMilli(ms), zone).format(timeFmt)
+
+/** 大字紧凑时长：7h 00m（状态卡核心数值用）。 */
+private fun bigDurationText(ms: Long): String {
+    val totalMin = ms / 60_000
+    val h = totalMin / 60
+    val m = totalMin % 60
+    return if (h > 0) "${h}h ${"%02d".format(m)}m" else "${m}m"
+}
 
 /** 权限授权状态（回到前台时自动刷新）。 */
 data class PermState(
@@ -109,6 +122,7 @@ fun HomeScreen(vm: HomeViewModel, onOpenMap: (Long) -> Unit) {
     val perm = rememberPermState()
     val context = LocalContext.current
     val zone = ZoneId.systemDefault()
+    var confirmStop by remember { mutableStateOf(false) }
 
     val fineLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -119,6 +133,24 @@ fun HomeScreen(vm: HomeViewModel, onOpenMap: (Long) -> Unit) {
     val notifLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { }
+
+    // 停止记录确认：破坏性操作防误触
+    if (confirmStop) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirmStop = false },
+            title = { Text("停止记录服务？") },
+            text = { Text("停止后将不再自动记录上下班打卡，今日之后的工时不会统计。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmStop = false
+                    TrackingService.stop(context)
+                }) { Text("停止", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmStop = false }) { Text("取消") }
+            }
+        )
+    }
 
     LazyColumn(
         modifier = Modifier
@@ -133,31 +165,106 @@ fun HomeScreen(vm: HomeViewModel, onOpenMap: (Long) -> Unit) {
 
         item {
             val canStart = perm.fine
-            Button(
-                onClick = {
-                    if (state.trackingEnabled) {
-                        TrackingService.stop(context)
-                    } else if (canStart) {
-                        TrackingService.start(context)
-                    } else {
-                        fineLauncher.launch(
-                            arrayOf(
-                                Manifest.permission.ACCESS_FINE_LOCATION,
-                                Manifest.permission.ACCESS_COARSE_LOCATION
+            if (state.trackingEnabled) {
+                // 停止：破坏性操作，描边警示样式 + 确认对话框
+                OutlinedButton(
+                    onClick = { confirmStop = true },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp)
+                ) {
+                    Icon(
+                        Icons.Filled.Stop,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "停止记录",
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            } else {
+                // 开始：主操作，品牌绿实心
+                Button(
+                    onClick = {
+                        if (canStart) {
+                            TrackingService.start(context)
+                        } else {
+                            fineLauncher.launch(
+                                arrayOf(
+                                    Manifest.permission.ACCESS_FINE_LOCATION,
+                                    Manifest.permission.ACCESS_COARSE_LOCATION
+                                )
                             )
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(56.dp)
+                ) {
+                    Icon(Icons.Filled.PlayArrow, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("开始记录")
+                }
+            }
+        }
+
+        // 当日工时计算模式快捷切换（Niu 视觉稿：主页直接切换「首进末出 / 多段并集」）
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp)) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "当日工时算法",
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                        Text(
+                            "切换后全 App 立即生效",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp)
-            ) {
-                Icon(
-                    if (state.trackingEnabled) Icons.Filled.Stop else Icons.Filled.PlayArrow,
-                    contentDescription = null
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(if (state.trackingEnabled) "停止记录" else "开始记录")
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .background(
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+                                androidx.compose.foundation.shape.RoundedCornerShape(12.dp)
+                            )
+                            .padding(4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        com.worktime.trace.data.prefs.CalcMode.entries.forEach { mode ->
+                            val selected = state.settings.calcMode == mode
+                            Box(
+                                Modifier
+                                    .weight(1f)
+                                    .height(40.dp)
+                                    .background(
+                                        if (selected) MaterialTheme.colorScheme.primary
+                                        else androidx.compose.ui.graphics.Color.Transparent,
+                                        androidx.compose.foundation.shape.RoundedCornerShape(10.dp)
+                                    )
+                                    .clickable { vm.setCalcMode(mode) },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    mode.label.replace("模式", ""),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = if (selected) MaterialTheme.colorScheme.onPrimary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -230,6 +337,23 @@ fun HomeScreen(vm: HomeViewModel, onOpenMap: (Long) -> Unit) {
                         )
                     } else {
                         state.workplaces.forEach { wp ->
+                            var confirmDelete by remember { mutableStateOf(false) }
+                            if (confirmDelete) {
+                                androidx.compose.material3.AlertDialog(
+                                    onDismissRequest = { confirmDelete = false },
+                                    title = { Text("删除工作地点？") },
+                                    text = { Text("「${wp.name}」将被删除，已产生的考勤记录仍会保留。") },
+                                    confirmButton = {
+                                        TextButton(onClick = {
+                                            confirmDelete = false
+                                            vm.deleteWorkplace(wp.id)
+                                        }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+                                    },
+                                    dismissButton = {
+                                        TextButton(onClick = { confirmDelete = false }) { Text("取消") }
+                                    }
+                                )
+                            }
                             ListItem(
                                 headlineContent = { Text(wp.name) },
                                 supportingContent = {
@@ -242,7 +366,7 @@ fun HomeScreen(vm: HomeViewModel, onOpenMap: (Long) -> Unit) {
                                     Icon(Icons.Filled.LocationOn, contentDescription = null)
                                 },
                                 trailingContent = {
-                                    IconButton(onClick = { vm.deleteWorkplace(wp.id) }) {
+                                    IconButton(onClick = { confirmDelete = true }) {
                                         Icon(
                                             Icons.Filled.DeleteOutline,
                                             contentDescription = "删除"
@@ -324,6 +448,13 @@ private fun StatusCard(state: HomeUiState, zone: ZoneId) {
         if (dark) androidx.compose.ui.graphics.Color(0xFFB9BEBB)
         else androidx.compose.ui.graphics.Color(0xFF5A615E)
     }
+    // 加班警示卡配色（Niu 视觉稿固定色值）
+    val alertContainer = if (dark) androidx.compose.ui.graphics.Color(0xFF93000A)
+    else androidx.compose.ui.graphics.Color(0xFFFFDAD6)
+    val alertContent = if (dark) androidx.compose.ui.graphics.Color(0xFFFFDAD6)
+    else androidx.compose.ui.graphics.Color(0xFF410002)
+    val alertIcon = if (dark) androidx.compose.ui.graphics.Color(0xFFFFB4AB)
+    else androidx.compose.ui.graphics.Color(0xFFBA1A1A)
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -331,18 +462,31 @@ private fun StatusCard(state: HomeUiState, zone: ZoneId) {
             containerColor = container
         )
     ) {
-        Column(Modifier.padding(20.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Filled.LocationOn,
-                    contentDescription = null,
-                    tint = accent
-                )
-                Spacer(Modifier.width(8.dp))
+        Column(Modifier.padding(16.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(
+                        Icons.Filled.LocationOn,
+                        contentDescription = null,
+                        tint = accent
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        if (inside) "在岗中" else "不在工作范围",
+                        style = MaterialTheme.typography.titleLarge,
+                        color = accent
+                    )
+                }
+                // 右上角：当前计时模式标签（Niu 视觉稿元素）
                 Text(
-                    if (inside) "在岗中" else "不在工作范围",
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = accent
+                    if (state.settings.calcMode == com.worktime.trace.data.prefs.CalcMode.FIRST_IN_LAST_OUT)
+                        "首进末出模式" else "多段累计模式",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = accent.copy(alpha = 0.85f)
                 )
             }
             Spacer(Modifier.height(8.dp))
@@ -350,34 +494,110 @@ private fun StatusCard(state: HomeUiState, zone: ZoneId) {
             if (state.currentlyInside) {
                 state.currentSessionStartMs?.let { start ->
                     Text(
-                        "${fmtTime(start, zone)} 进入，本次已在岗 " +
-                            OvertimeCalculator.formatDuration(
-                                (state.now - start).coerceAtLeast(0)
-                            ),
+                        "本次 ${fmtTime(start, zone)} 进入围栏" +
+                            "，当前仍在围栏内",
                         style = MaterialTheme.typography.bodyMedium
                     )
                 }
             } else if (today != null && today.workMs > 0 && today.lastOutMs != null) {
                 Text(
-                    "今日 ${fmtTime(today.firstInMs ?: 0, zone)} – ${fmtTime(today.lastOutMs, zone)}",
+                    "首进 ${fmtTime(today.firstInMs ?: 0, zone)} · 末出 ${fmtTime(today.lastOutMs, zone)}",
                     style = MaterialTheme.typography.bodyMedium
                 )
-            }
-            if (today != null && today.workMs > 0) {
+            } else if (today == null || today.workMs == 0L) {
                 Text(
-                    "今日在岗 ${OvertimeCalculator.formatDuration(today.workMs)}" +
-                        if (today.overtimeMs > 0) {
-                            " · 加班 " + OvertimeCalculator.formatDuration(today.overtimeMs)
-                        } else "",
+                    "今日尚无进入围栏记录",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+            if (today != null && today.workMs > 0) {
+                Spacer(Modifier.height(4.dp))
+                // 核心数值：大字突出（Niu 视觉稿的 font-mono 大数字风格）
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Bottom
+                ) {
+                    Column {
+                        Text(
+                            "今日在岗",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            bigDurationText(today.workMs),
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    if (today.overtimeMs > 0) {
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                "加班",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = androidx.compose.ui.graphics.Color(0xFFBA1A1A)
+                            )
+                            Text(
+                                bigDurationText(today.overtimeMs),
+                                style = MaterialTheme.typography.headlineMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = androidx.compose.ui.graphics.Color(0xFFBA1A1A)
+                            )
+                        }
+                    }
+                }
+                val thresholdMs = (state.settings.overtimeAlertThresholdHours * 3_600_000f).toLong()
+                if (state.settings.overtimeAlertEnabled && today.overtimeMs >= thresholdMs) {
+                    Spacer(Modifier.height(8.dp))
+                    androidx.compose.material3.Surface(
+                        color = alertContainer,
+                        contentColor = alertContent,
+                        shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            androidx.compose.material3.Icon(
+                                androidx.compose.material.icons.Icons.Filled.Warning,
+                                contentDescription = null,
+                                tint = alertIcon,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    text = "今日加班较多，注意休息",
+                                    style = MaterialTheme.typography.labelLarge
+                                )
+                                Text(
+                                    text = "今日已加班 ${OvertimeCalculator.formatDuration(today.overtimeMs)}（已超 ${state.settings.overtimeAlertThresholdHours} 小时阈值）",
+                                    style = MaterialTheme.typography.labelSmall
+                                )
+                            }
+                        }
+                    }
+                }
+                // 当天同时展示两种计时模式的对比差值（两种算法结果不同时才有意义）
+                if (today.firstLastSpanMs != today.intervalUnionMs) {
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        "对比：首进末出 ${OvertimeCalculator.formatDuration(today.firstLastSpanMs)}" +
+                            " vs 多段并集 ${OvertimeCalculator.formatDuration(today.intervalUnionMs)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
             if (!state.trackingEnabled) {
+                Spacer(Modifier.height(4.dp))
                 Text(
                     "记录服务未开启",
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.error
+                    color = androidx.compose.ui.graphics.Color(0xFFBA1A1A),
+                    fontWeight = FontWeight.SemiBold
                 )
             }
         }

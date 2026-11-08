@@ -74,6 +74,9 @@ class TrackingService : Service() {
     private var locator: Locator? = null
     private val tracker = ZoneStateTracker(exitConfirmations = 2)
 
+    /** 已完成首次定位自愈对账的工作地点（服务生命周期内每地点只对账一次）。 */
+    private val reconciledWorkplaces = mutableSetOf<Long>()
+
     @Volatile
     private var running = false
 
@@ -143,7 +146,7 @@ class TrackingService : Service() {
     private fun startLocator(intervalMs: Long) {
         locator?.destroy()
         locator = LocatorFactory.create(applicationContext).also {
-            it.startPeriodic(intervalMs) { lat, lng -> onPosition(lat, lng) }
+            it.startPeriodic(intervalMs) { lat, lng, acc -> onPosition(lat, lng, acc) }
         }
     }
 
@@ -165,20 +168,89 @@ class TrackingService : Service() {
 
     // ---- 定位回调（可能在任意线程）----
 
-    private fun onPosition(lat: Double, lng: Double) {
-        com.worktime.trace.util.AppLogger.d("定位回调: lat=$lat lng=$lng")
+    private fun onPosition(lat: Double, lng: Double, accuracyMeters: Float = 0f) {
+        com.worktime.trace.util.AppLogger.d(
+            "定位回调: lat=$lat lng=$lng 精度=${accuracyMeters.toInt()}m"
+        )
         scope.launch(positionDispatcher) {
+            val now = System.currentTimeMillis()
+            val zone = java.time.ZoneId.systemDefault()
+            val today = java.time.Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+            val latestMap = app.repository.latestEventPerWorkplace().associateBy { it.workplaceId }
             val workplaces = app.repository.getEnabledWorkplaces()
+
             for (wp in workplaces) {
                 val dist = GeoUtils.distanceMeters(lat, lng, wp.latitude, wp.longitude)
                 val insideNow = dist <= wp.radiusMeters
-                val changed = tracker.onReading(wp.id, insideNow)
+
+                // 服务启动后首次定位自愈对账：处理「启动即在围栏内」与「关机在围栏内、开机已离开围栏」
+                if (reconciledWorkplaces.add(wp.id)) {
+                    val lastEv = latestMap[wp.id]
+                    val wasInsideInDb = lastEv?.type == EventType.ENTER
+
+                    if (wasInsideInDb && !insideNow && lastEv != null) {
+                        // 数据库仍为在岗但物理位置已在外：关机/离线期间离开了围栏，
+                        // 按关机前最后一次在岗心跳回溯补记下班，避免整夜误算加班
+                        val lastBeat = app.settingsStore.getLastInsideBeat(wp.id)
+                        val enterDayEnd = java.time.Instant.ofEpochMilli(lastEv.timestamp)
+                            .atZone(zone).toLocalDate().plusDays(1)
+                            .atStartOfDay(zone).toInstant().toEpochMilli() - 1000L
+                        val safeExitTs = when {
+                            lastBeat != null && lastBeat >= lastEv.timestamp && lastBeat < now -> lastBeat
+                            else -> minOf(now, maxOf(lastEv.timestamp + 60_000L, enterDayEnd))
+                        }
+                        app.repository.addEvent(wp.id, EventType.EXIT, safeExitTs, lat, lng)
+                        com.worktime.trace.util.AppLogger.w("关机/离线出围栏自愈: 地点=${wp.name} 回溯补记下班 @ $safeExitTs")
+                        tracker.initInside(wp.id, false)
+                        continue
+                    }
+
+                    if (insideNow && !wasInsideInDb) {
+                        // 启动/恢复定位时人已在围栏内（无需物理跨越）：立即补记今日上班
+                        tracker.initInside(wp.id, true)
+                        app.repository.addEvent(wp.id, EventType.ENTER, now, lat, lng)
+                        app.settingsStore.setLastInsideBeat(wp.id, now)
+                        com.worktime.trace.util.AppLogger.d("启动即在围栏内: 地点=${wp.name} 立即补记上班(ENTER)")
+                        notifyStateChange(true, wp.name)
+                        continue
+                    }
+
+                    if (insideNow && wasInsideInDb && lastEv != null) {
+                        // 在岗状态跨天（昨日 ENTER 未闭合）：先按心跳/23:59:59 闭合昨日下班，再补记今日上班
+                        val enterDate = java.time.Instant.ofEpochMilli(lastEv.timestamp).atZone(zone).toLocalDate()
+                        if (enterDate.isBefore(today)) {
+                            val lastBeat = app.settingsStore.getLastInsideBeat(wp.id)
+                            val yesterdayEnd = enterDate.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli() - 1000L
+                            val closeTs = if (lastBeat != null && lastBeat > lastEv.timestamp && lastBeat <= yesterdayEnd) {
+                                lastBeat
+                            } else yesterdayEnd
+                            app.repository.addEvent(wp.id, EventType.EXIT, closeTs, null, null)
+                            app.repository.addEvent(wp.id, EventType.ENTER, now, lat, lng)
+                            com.worktime.trace.util.AppLogger.w("跨天关机重入围栏自愈: 闭合昨日下班 @ $closeTs, 补记今日上班 @ $now")
+                        }
+                        tracker.initInside(wp.id, true)
+                        app.settingsStore.setLastInsideBeat(wp.id, now)
+                        continue
+                    }
+                }
+
+                if (insideNow) {
+                    // 在岗心跳：每次定位成功都刷新，关机回溯时用作下班时间
+                    app.settingsStore.setLastInsideBeat(wp.id, now)
+                }
+
+                val changed = tracker.onReadingWithAccuracy(
+                    workplaceId = wp.id,
+                    distanceMeters = dist,
+                    radiusMeters = wp.radiusMeters,
+                    accuracyMeters = accuracyMeters
+                )
                 if (changed != null) {
                     val type = if (changed) EventType.ENTER else EventType.EXIT
                     app.repository.addEvent(
                         workplaceId = wp.id,
                         type = type,
-                        timestamp = System.currentTimeMillis(),
+                        timestamp = now,
                         latitude = lat,
                         longitude = lng
                     )
